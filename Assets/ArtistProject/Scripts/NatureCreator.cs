@@ -47,15 +47,17 @@ namespace JingProd.ArtProject{
 		void GenerateFire (){
 			Transform temp = Instantiate(m_FirePrefab);
 			temp.SetParent (transform, false);
-			Vector3 landpos = m_Player.LandingPoint;
-			temp.position = new Vector3 (landpos.x, temp.position.y, landpos.z);
+			Vector3 initPos = m_Player.transform.position;
+			temp.position = new Vector3 (initPos.x, initPos.y + 1, initPos.z);
+			temp.GetComponent<Rigidbody>().AddForce (Vector3.up * 5f, ForceMode.Impulse);
 		}
 
 		void GenerateTree (){
 			Transform temp = Instantiate(m_TreePrefab);
 			temp.SetParent (transform, false);
-			Vector3 landpos = m_Player.LandingPoint;
-			temp.position = new Vector3 (landpos.x, temp.position.y, landpos.z);
+			Vector3 initPos = m_Player.transform.position;
+			temp.position = new Vector3 (initPos.x, initPos.y + 1, initPos.z);
+			temp.GetComponent<Rigidbody>().AddForce (Vector3.up * 5f, ForceMode.Impulse);
 		}
 
 		void GenerateWater (){
