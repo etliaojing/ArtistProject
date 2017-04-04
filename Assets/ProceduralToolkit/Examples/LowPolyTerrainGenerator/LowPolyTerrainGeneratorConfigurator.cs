@@ -25,50 +25,7 @@ namespace ProceduralToolkit.Examples
 
         private void Awake()
         {
-            Generate();
-            SetupSkyboxAndPalette();
-
-            InstantiateControl<SliderControl>(leftPanel)
-                .Initialize("Terrain size X", minXSize, maxXSize, (int) config.terrainSize.x, value =>
-                {
-                    config.terrainSize.x = value;
-                    Generate();
-                });
-
-            InstantiateControl<SliderControl>(leftPanel)
-                .Initialize("Terrain size Y", minYSize, maxYSize, (int) config.terrainSize.y, value =>
-                {
-                    config.terrainSize.y = value;
-                    Generate();
-                });
-
-            InstantiateControl<SliderControl>(leftPanel)
-                .Initialize("Terrain size Z", minZSize, maxZSize, (int) config.terrainSize.z, value =>
-                {
-                    config.terrainSize.z = value;
-                    Generate();
-                });
-
-            InstantiateControl<SliderControl>(leftPanel)
-                .Initialize("Cell size", minCellSize, maxCellSize, config.cellSize, value =>
-                {
-                    config.cellSize = value;
-                    Generate();
-                });
-
-            InstantiateControl<SliderControl>(leftPanel)
-                .Initialize("Noise scale", minNoiseScale, maxNoiseScale, (int) config.noiseScale, value =>
-                {
-                    config.noiseScale = value;
-                    Generate();
-                });
-
-            InstantiateControl<ButtonControl>(leftPanel).Initialize("Generate", () => Generate());
-        }
-
-        private void Update()
-        {
-            UpdateSkybox();
+            // Generate();
         }
 
         public void Generate(bool randomizeConfig = true)
@@ -76,13 +33,6 @@ namespace ProceduralToolkit.Examples
             if (constantSeed)
             {
                 Random.InitState(0);
-            }
-
-            if (randomizeConfig)
-            {
-                GeneratePalette();
-
-                config.gradient = ColorE.Gradient(from: GetMainColorHSV(), to: GetSecondaryColorHSV());
             }
 
             var draft = LowPolyTerrainGenerator.TerrainDraft(config);

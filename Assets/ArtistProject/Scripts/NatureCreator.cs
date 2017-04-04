@@ -16,7 +16,7 @@ namespace JingProd.ArtProject{
 		[SerializeField] PlayerMovementController m_Player;
 
 		[SerializeField] Transform m_FirePrefab;
-		[SerializeField] Transform m_TreePrefab;
+		[SerializeField] Transform[] m_TreePrefabs;
 		[SerializeField] Transform m_WaterPrefab;
 		
 
@@ -53,7 +53,7 @@ namespace JingProd.ArtProject{
 		}
 
 		void GenerateTree (){
-			Transform temp = Instantiate(m_TreePrefab);
+			Transform temp = Instantiate(m_TreePrefabs[Random.Range(0,m_TreePrefabs.Length)]);
 			temp.SetParent (transform, false);
 			Vector3 initPos = m_Player.transform.position;
 			temp.position = new Vector3 (initPos.x, initPos.y + 1, initPos.z);
