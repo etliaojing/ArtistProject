@@ -38,6 +38,8 @@ namespace ProceduralToolkit.Examples
             var draft = LowPolyTerrainGenerator.TerrainDraft(config);
             draft.Move(Vector3.left*config.terrainSize.x/2 + Vector3.back*config.terrainSize.z/2);
             AssignDraftToMeshFilter(draft, terrainMeshFilter, ref terrainMesh);
+            terrainMeshFilter.GetComponent<MeshCollider>().sharedMesh = null;
+            terrainMeshFilter.GetComponent<MeshCollider>().sharedMesh = terrainMeshFilter.mesh;
         }
     }
 }

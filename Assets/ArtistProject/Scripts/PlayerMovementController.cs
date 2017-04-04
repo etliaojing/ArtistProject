@@ -36,6 +36,11 @@ namespace JingProd.ArtProject{
 		}
 		
 		void Update () {
+			#if UNITY_EDITOR
+			float moveX = Input.GetAxis("Horizontal");
+			float moveY = Input.GetAxis("Vertical");
+			transform.position += new Vector3 (moveX, 0, moveY) * 100 * MovementSpeed * Time.deltaTime;
+			#endif
 			transform.position += new Vector3 (mMovement.x, 0, mMovement.y) * MovementSpeed * Time.deltaTime;
 			float h = transform.position.y;
 			h = Mathf.SmoothDamp (h, targetHeight, ref currentVelocity, 0.2f);
