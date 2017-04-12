@@ -4,8 +4,10 @@ using UnityEngine;
 
 namespace JingProd.ArtProject{
 	public enum MyNatureType {
+		None,
 		Water,
 		Tree,
-		Fire
+		Fire,
+		Burned
 	}
 }

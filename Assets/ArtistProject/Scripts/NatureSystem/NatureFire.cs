@@ -6,29 +6,25 @@ using DG.Tweening;
 namespace JingProd.ArtProject{
 	public class NatureFire : NatureObject {
 
-		void OnCollisionEnter(Collision other)
-		{
-			if (other.gameObject.layer == 9){
-				if (other.gameObject.GetComponent<NatureObject>().NatureType == MyNatureType.Tree){
-					other.gameObject.GetComponent<NatureTree>().OnCaughtFire();
-					transform.DOScale (0, 0.5f).SetEase (Ease.OutQuad).OnComplete (()=>{
-						Destroy (gameObject);
-					});
-				}
-			}
-		}
+		[SerializeField] SpriteRenderer m_SpriteRenderer;
 
-		void OnTriggerEnter(Collider other)
+		void OnTriggerEnter2D(Collider2D other)
 		{
-			if (other.gameObject.layer == 9){
-				if (other.gameObject.GetComponent<NatureObject>().NatureType == MyNatureType.Water){
+			if (other.gameObject.layer == 8){ //player
+				if (NatureCreator.SelectedNatureType == MyNatureType.Water){
 					Terminate();
+				}
+				else if (NatureCreator.SelectedNatureType == MyNatureType.Tree){
+					other.gameObject.GetComponent<PlayerRing>().SetToBurnedNature();
+					NatureCreator.SelectedNatureType = MyNatureType.Burned;
 				}
 			}
 		}
 
 		void Terminate(){
-			transform.DOScale(0, 0.5f).SetEase(Ease.OutQuad).SetDelay(0.5f).OnComplete(()=>{
+			GetComponent<Collider2D>().enabled = false;
+			m_SpriteRenderer.DOColor(Color.white, 0.5f);
+			transform.DOScale(0, 0.5f).SetEase(Ease.OutQuad).SetDelay(0.3f).OnComplete(()=>{
 				Destroy(gameObject);
 			});
 		}
