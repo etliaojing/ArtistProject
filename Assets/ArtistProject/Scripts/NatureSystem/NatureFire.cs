@@ -2,28 +2,28 @@
 using System.Collections.Generic;
 using UnityEngine;
 using DG.Tweening;
+using JingProd.ArtProject.Metaball.Utility;
 
 namespace JingProd.ArtProject{
 	public class NatureFire : NatureObject {
 
-		[SerializeField] SpriteRenderer m_SpriteRenderer;
+		[SerializeField] Transform m_TerminatePrefab;
 
-		void OnTriggerEnter2D(Collider2D other)
+		void OnCollisionEnter2D(Collision2D other)
 		{
-			if (other.gameObject.layer == 8){ //player
-				if (NatureCreator.SelectedNatureType == MyNatureType.Water){
-					Terminate();
-				}
-				else if (NatureCreator.SelectedNatureType == MyNatureType.Tree){
-					other.gameObject.GetComponent<PlayerRing>().SetToBurnedNature();
-					NatureCreator.SelectedNatureType = MyNatureType.Burned;
-				}
+			if (other.gameObject.layer == 11){ //nature water
+				Terminate();
 			}
 		}
 
 		void Terminate(){
 			GetComponent<Collider2D>().enabled = false;
-			m_SpriteRenderer.DOColor(Color.white, 0.5f);
+			GetComponent<AutoMover>().enabled = false;
+			GetComponent<AutoScaler>().enabled = false;
+			Transform whiteFire = Instantiate(m_TerminatePrefab);
+			whiteFire.SetParent(transform, false);
+			whiteFire.localScale = Vector3.one;
+			whiteFire.GetComponent<SpriteRenderer>().DOFade(1, 0.5f);
 			transform.DOScale(0, 0.5f).SetEase(Ease.OutQuad).SetDelay(0.3f).OnComplete(()=>{
 				Destroy(gameObject);
 			});

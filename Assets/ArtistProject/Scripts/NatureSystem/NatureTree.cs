@@ -10,31 +10,28 @@ namespace JingProd.ArtProject{
 		bool isWatered = false;
 		[SerializeField] SpriteRenderer m_SpriteRenderer;
 
-		void OnTriggerEnter2D(Collider2D other)
+		void OnCollisionEnter2D(Collision2D other)
 		{
-			if (other.gameObject.layer == 8){ //player
-				if (NatureCreator.SelectedNatureType == MyNatureType.Water){
-					if (isWatered)	return;
+			if (other.gameObject.layer == 11){ //water
+				if (isWatered)	return;
 					
-					NatureTree[] allTrees = transform.parent.GetComponentsInChildren<NatureTree>(true);
-					foreach (NatureTree t in allTrees) t.GrowUp();
+					// NatureTree[] allTrees = transform.parent.GetComponentsInChildren<NatureTree>(true);
+					// foreach (NatureTree t in allTrees) t.GrowUp();
+				GrowUp();
 
-					other.gameObject.GetComponent<PlayerRing>().SetToTreeNature();
-					NatureCreator.SelectedNatureType = MyNatureType.Tree;
-				}
-				else if (NatureCreator.SelectedNatureType == MyNatureType.Fire){
-					OnCaughtFire();
-				}
+					// other.gameObject.GetComponent<PlayerRing>().SetToTreeNature();
+			}else if(other.gameObject.layer == 9){ //fire
+				OnCaughtFire();
 			}
 		}
 
 		public void GrowUp(){
 			if (isWatered) return;
 			isWatered = true;
-			GetComponent<AutoMover>().BoundRadius += 80;
+			GetComponent<AutoMover>().BoundRadius += 20;
 			AutoScaler script = GetComponent<AutoScaler>();
-			script.MinScale += 10f;
-			script.MaxScale += 10f;
+			script.MinScale += 0.5f;
+			script.MaxScale += 0.5f;
 			script.CalculateDifference();
 		}
 		public void OnCaughtFire (){
