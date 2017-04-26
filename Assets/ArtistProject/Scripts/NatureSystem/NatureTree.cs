@@ -36,7 +36,12 @@ namespace JingProd.ArtProject{
 		}
 		public void OnCaughtFire (){
 			GetComponent<Collider2D>().enabled = false;
+			GetComponent<AutoMover>().enabled = false;
+			GetComponent<AutoScaler>().enabled = false;
 			m_SpriteRenderer.DOColor(new Color32(118,73,59,255), 0.5f);
+			transform.DOScale(0, 0.5f).SetEase(Ease.OutQuad).SetDelay(0.3f).OnComplete(()=>{
+				Destroy(gameObject);
+			});
 		}
 	}
 }
