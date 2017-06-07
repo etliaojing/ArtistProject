@@ -6,13 +6,31 @@ using System.Collections;
 public class ParticlesAreaManipulatorEditor : Editor
 {
     bool m_debug = false;
+    int m_selected = 0;
     public override void OnInspectorGUI()
     {
         base.OnInspectorGUI();
         ParticlesAreaManipulator emitter = (ParticlesAreaManipulator)target;
-        if (emitter.m_particlesArea == null)
+
+        if (emitter.m_particlesAreaObject == null)
         {
             EditorGUILayout.HelpBox("Fluid particles not defined", MessageType.Error);
+        }
+        else //if(emitter.m_particlesArea == null)
+        {
+            
+            ParticlesArea[] targets = emitter.m_particlesAreaObject.GetComponents<ParticlesArea>();
+            string[] options = new string[targets.Length];
+
+            for(int i = 0; i < targets.Length; ++i)
+            {
+                options[i] = targets[i].ToString() + i.ToString();
+                if (emitter.m_particlesArea != null && emitter.m_particlesArea == targets[i])
+                    m_selected = i;
+            }
+
+            m_selected = EditorGUILayout.Popup(m_selected, options);
+            emitter.m_particlesArea = targets[m_selected];
         }
 
         // Strength

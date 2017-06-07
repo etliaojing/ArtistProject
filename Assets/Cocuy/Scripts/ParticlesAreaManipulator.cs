@@ -5,7 +5,10 @@ using System.Collections;
 [ExecuteInEditMode]
 public class ParticlesAreaManipulator : MonoBehaviour {
 
-	public ParticlesArea m_particlesArea;
+    public GameObject m_particlesAreaObject;
+
+    [HideInInspector]
+    public ParticlesArea m_particlesArea;
 	[HideInInspector]
 	public bool m_useScaleAsSize = true;
 	[HideInInspector]
