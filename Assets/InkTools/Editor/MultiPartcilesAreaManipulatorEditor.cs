@@ -2,15 +2,15 @@
 using UnityEditor;
 using System.Collections;
 
-[CustomEditor(typeof(ParticlesAreaManipulator))]
-public class ParticlesAreaManipulatorEditor : Editor
+[CustomEditor(typeof(MultiParticlesAreaManipulator))]
+public class MultiParticlesAreaManipulatorEditor : Editor
 {
     bool m_debug = false;
     int m_selected = 0;
     public override void OnInspectorGUI()
     {
         base.OnInspectorGUI();
-        ParticlesAreaManipulator emitter = (ParticlesAreaManipulator)target;
+        MultiParticlesAreaManipulator emitter = (MultiParticlesAreaManipulator)target;
 
         if (emitter.m_particlesAreaObject == null)
         {
@@ -19,7 +19,7 @@ public class ParticlesAreaManipulatorEditor : Editor
         else //if(emitter.m_particlesArea == null)
         {
             
-            ParticlesArea[] targets = emitter.m_particlesAreaObject.GetComponents<ParticlesArea>();
+            MultiParticlesArea[] targets = emitter.m_particlesAreaObject.GetComponents<MultiParticlesArea>();
             string[] options = new string[targets.Length];
 
             for(int i = 0; i < targets.Length; ++i)

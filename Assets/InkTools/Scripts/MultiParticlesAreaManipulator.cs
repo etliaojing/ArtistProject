@@ -1,14 +1,14 @@
 ﻿using UnityEngine;
 using System.Collections;
 
-[AddComponentMenu("Cocuy/Particles Area Manipulator")]
+[AddComponentMenu("InkTools/Multi Particles Area Manipulator")]
 [ExecuteInEditMode]
-public class ParticlesAreaManipulator : MonoBehaviour {
+public class MultiParticlesAreaManipulator : MonoBehaviour {
 
     public GameObject m_particlesAreaObject;
 
     [HideInInspector]
-    public ParticlesArea m_particlesArea;
+    public MultiParticlesArea m_particlesArea;
 	[HideInInspector]
 	public bool m_useScaleAsSize = true;
 	[HideInInspector]

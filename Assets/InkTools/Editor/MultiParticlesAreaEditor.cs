@@ -2,8 +2,8 @@
 using UnityEditor;
 using System.Collections;
 
-[CustomEditor(typeof(ParticlesArea))]
-public class ParticleAreaEditor : Editor {
+[CustomEditor(typeof(MultiParticlesArea))]
+public class MultiParticleAreaEditor : Editor {
 
 	public override void OnInspectorGUI()
 	{
