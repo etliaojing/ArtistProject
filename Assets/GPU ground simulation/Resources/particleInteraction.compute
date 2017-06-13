@@ -1,0 +1,907 @@
+﻿#pragma kernel calcImpact
+
+// we have to redeclare the structures for our gpu side buffers
+// same amount of bytes should be used, otherwise tight packing will
+struct soilParticlePos{
+	float x;
+	float y;
+	int vx;
+	int vy;
+	uint4 c;			// see, we had 6 connections, but there's no intrinsic types bigger than 4 variables in one
+	uint2 c1;			// so I had to use two more. We could use 1 int to hold 2 connections, but I decided not to, to keep the code simplier
+	int dvx;
+	int dvy;
+};
+
+// now another per-particle structure, for the second buffer
+struct soilParticle{
+	uint color;			// for the color I use one int for a reason, because painting pixels must be interlocked, which is slow, so 1 is much better than 4
+	int dummy1;
+	int dummy2;
+	int dummy3;
+	int impact;
+	int ddvx;			// change of change of speed. Intrigued? It's explained below 
+	int ddvy;			//
+	float t;			// temperature
+};
+
+// and this is explosion structure, again same as in calcs.cs
+struct explosion{
+	float x;
+	float y;
+	float r;
+	float f;
+};
+
+// now we declare buffers
+RWStructuredBuffer<explosion> expl;					// explosions buffer, will keep explosions as they being passed to the shader
+
+RWStructuredBuffer<int> grid;						// that grid of cells holding particle indexes
+
+RWStructuredBuffer<soilParticle> particles;			// these buffers contain information about each particle 
+RWStructuredBuffer<soilParticlePos> particlePos;	//
+
+RWStructuredBuffer<float> gravMask;					//
+RWStructuredBuffer<float> densMask;					//
+
+RWTexture2D<float4> outputTexture;					// this is the texture we draw at, but drawing directly from many threads causes flickering pixels
+RWStructuredBuffer<uint> pixels;					// so we draw pixels in this array, by using InterlockedAdd, that is a protected way of writing data
+
+
+
+// NOTE about structured buffers we just declared
+// even though they look like they are a part of the shader, kernels will not have access to the buffers
+// until we assign them by calling SetBuffer() from the CPU side of the code. It is done in calcs.cs
+
+// Ok, now the kernels follow
+// but first a little note:
+// kernel is a code that will be runned at gpu side, one instance per thread
+// there will be many threads, and uint3 id : SV_DispatchThreadID variable will contain the index of the thread
+// id variable has three dimensions, but for our particles we will only use id.x dimension
+// and we will have one thread per particle
+//
+// Example: if we have 4 particles in our array, we could have [numthreads(4,1,1)] directive right before the kernel, and dispatch one (1, 1, 1) thread group
+// it will create 4 threads, with id.x be in [0, 3] interval for each thread
+// OR we could have [numthreads(2,1,1)] and dispatch two thread groups: (2, 1, 1). And that wil be another way to have four threads for each particle
+// OR we could have [numthreads(1,1,1)] and dispatch two thread groups: (4, 1, 1) - again 4 threads
+//
+// see? the indexes multiply, and we need to decide how many threads in a group and how many groups to dispatch to have as many threads as we need
+//
+// again, check this link, it may help you to understand how groups and threads are organized and how the index works, it's rather simple:
+// https://msdn.microsoft.com/en-us/library/windows/desktop/ff471442(v=vs.85).aspx
+
+// ok, let's go further and create all the kernels
+
+// but one little note before we start:
+// there's "grid" array, it is a 256 x 256 x gcs array, which is being refreshed EVERY FRAME
+// because it must contain actual information about which particles are close to which
+// it is done by writing particle indexes inside each cell
+// and when a particle need to know its close neighbors, it checks the grid array
+// it is a huge optimization for this kind of task
+// there's a dedicated kernel that refreshes grid array, I will provide more information about it below
+
+// ok, now let's check the kernels
+
+
+
+
+// this is the main calculations kernel, that implements interactions between the particles
+// in this kernel each particles checks grid array, measures distances to each particle from the neighboring cells of that grid
+// and if they close enough, the forces between the particles change their velosities
+[numthreads(256,1,1)]								// 256 threads per group in X dimension, and thread groups too indexed in X dimension, so id.x can be used to access particles in the structured buffer
+void calcImpact (uint3 id : SV_DispatchThreadID)
+{
+	int gi, i, i1;									// grid coordinates and grid index of the particle
+	int linkValue;									// used to handle "chemical bonds" between particles, there are bonds that being created and broken
+
+	// the following set of variables controls how particles interact
+	// dLink - distance of equality between particles, where attraction and repulse forces are balanced
+	// dlinkF - distance of equality factor, so dLink = dLinkF * R, where R is particle's radius (currently radius == 1)
+	// linkStart - max distance where chemical bonds may be created; linkBreak - minimum distance where existing bonds can't be broken
+	// tLinkDown - a factor which controls how temperature affects linkStart and linkBreak parameters
+	// tRepulseDecay and tAttractDecay - control how attract and repulse forces between particles being modulated by their temperature
+	float dLink, dLinkF = 1.1f, linkStart = 1.65f, linkBreak = 1.7f, tLinkDown = 0.6f, tRepulseDecay = 0.85f, tAttractDecay = 0.91f;
+
+	float dTemperature, tExchangeRate = 0.01f;		// these variables used in temperature diffusion 
+	int2 gp;										// grid coordinates
+	int gj, pi;										// grid index, particle index
+	float dvx, dvy, dposx, dposy;							// these variables used to calculate velosity changes between particles
+	float2 proj, nProj;										//
+	float projFactor;										//
+	float2 sv, pushForce;									//
+	int currentCell;
+	float radius2 = 2.0f;							// just doubled radius
+	float tMid;										// middle temperature of two particles
+
+	int bright = 1024, bleft = 0, btop = 1024, bbot = 0;	// borders of simulation area
+
+	float translateFactor = 0.02f;							// fixed update deltatime
+	float transx, transy;									// these variables are a part of particle-border collision check
+
+	float d, dFixed, dFuture, radiuses;						// distance related variables
+
+	int gcs = 36, gcl = 35;									// grid cell size, grid cell last
+	uint aidx;												// another's index; main particle's index is id.x, another particle is aidx
+
+	soilParticlePos pCurrent, pAnother;						// variables to save current particles data, to avoid reading structured buffer (which is slower)
+
+	uint NOLINK = 10000000;									// this constant means a chemical bond link variable doesn't reference to any particle
+	float floatToIntK = 1200000;							// this factor turns float velosity to int velosity; velosity is int because of interlocked limits
+	float intMultiplier = 1.0f/(float)floatToIntK;			// int velosity to float
+	float dFutureFactor = 0.0025f * intMultiplier;			// int velosity to tiny step to check
+
+	bool currentAvailable = false, anotherAvailable = false;		// true if free link slots available, to consider connecting
+	bool connected = false, closing;								// true if they connected, true if they getting closer
+
+	// grid positioning
+	pCurrent = particlePos[id.x];
+	gp = clamp(int2((int)(0.25f * pCurrent.x), (int)(0.25f * pCurrent.y)), int2(0, 0), int2(255, 255));		// grid is 256x256, simulation area is 1024x1024
+
+	// interacting with borders
+	if (gp.x < 2 || gp.x > 253 || gp.y < 2 || gp.y > 253){
+		transx = mul(intMultiplier * translateFactor, pCurrent.vx);
+		transy = mul(intMultiplier * translateFactor, pCurrent.vy);
+		// RIGHT
+		if (pCurrent.x + transx >= bright){
+			if (transx > 0){
+				pCurrent.vx = -pCurrent.vx;
+				particlePos[id.x].vx = pCurrent.vx;
+			}
+		}
+		// LEFT
+		if (pCurrent.x + transx <= bleft){
+			if (transx < 0){
+				pCurrent.vx = -pCurrent.vx;
+				particlePos[id.x].vx = pCurrent.vx;
+			}
+		}
+		if (pCurrent.x < 6){
+			particlePos[id.x].vx += 3 * (6 - pCurrent.x) * floatToIntK;
+		}
+		// TOP
+		if (pCurrent.y + transy >= btop){
+			if (transy > 0){
+				pCurrent.vy = -pCurrent.vy;
+				particlePos[id.x].vy = pCurrent.vy;
+			}
+		}
+		if (pCurrent.x > 1018){
+			particlePos[id.x].vx -= 3 * (pCurrent.x - 1018) * floatToIntK;
+		}
+		// BOTTOM
+		if (pCurrent.y + transy <= bbot){
+			if (transy < 0){
+				pCurrent.vy = -pCurrent.vy;
+				particlePos[id.x].vy = pCurrent.vy;
+			}
+		}
+		if (pCurrent.y < 6){
+			particlePos[id.x].vy += 3 * (6 - pCurrent.y) * floatToIntK;
+		}
+	}
+
+	// the following instruction is used to make sure that wall interactions have happened before futher calculations
+	AllMemoryBarrierWithGroupSync();
+
+	// now we need to calculate interactions between the particles
+	// if there wasn't grid, we would have to deal with O(N^2) complexity
+	// but grid contains information about neighbors, and we only need to check them, so it's now something between O(log(N)) and O(k * N) complexity
+	// which is decisive optimization, because we currently have tens of thousands particles, and O(N^2) would be a disaster
+	// so, we simply need to check the 9 grid cells - a small area around the particle, and check every particle in this area
+	gi = gp.x - 1;
+	while(gi <= gp.x + 1){												// 3x3 grid cell space to be checked
+		gj = gp.y - 1;
+		while (gj <= gp.y + 1){
+			if (gi >= 0 && gi < 256 && gj >= 0 && gj < 256){			// if grid cell is not outside the borders
+				currentCell = gcs * (256 * gj + gi);
+				pi = 0;													// particle index
+				while (pi < grid[currentCell + gcl]){					// checking each particle of the current cell
+					aidx = grid[currentCell + pi];
+					if (id.x >= aidx){									// so each pair will only interact once, also no self interaction
+						pi++;
+						continue;
+					}
+
+					tMid = 0.5f * (particles[id.x].t + particles[aidx].t);		// middle temperature of the particles
+
+					pAnother = particlePos[aidx];						// we copied particle data to avoid checking structured buffer, local variable is faster
+					pCurrent = particlePos[id.x];						//
+
+					d = distance(	float2(pCurrent.x, pCurrent.y),
+									float2(pAnother.x, pAnother.y));	// distance between the particles
+					
+					radiuses = 2.0f * radius2;							// radius of interaction
+					if (d >= radiuses){									// so, if distance is greater than doubled sum of their radiusi, no interaction happens
+						pi++;
+						continue;
+					}
+
+					dLink = dLinkF * radius2;							// this is the absolute distance particles would feel most comfortable at
+
+					// now we need to determine if particles are connected and if they have free connection slots; each particle can have up to 6 links
+					if (pCurrent.c[0] == NOLINK || pCurrent.c[1] == NOLINK || pCurrent.c[2] == NOLINK || pCurrent.c[3] == NOLINK || pCurrent.c1[0] == NOLINK || pCurrent.c1[1] == NOLINK)
+						currentAvailable = true;
+					else
+						currentAvailable = false;
+					if (pAnother.c[0] == NOLINK || pAnother.c[1] == NOLINK || pAnother.c[2] == NOLINK || pAnother.c[3] == NOLINK || pAnother.c1[0] == NOLINK || pAnother.c1[1] == NOLINK)
+						anotherAvailable = true;
+					else
+						anotherAvailable = false;
+					if (pCurrent.c[0] == aidx || pCurrent.c[1] == aidx || pCurrent.c[2] == aidx || pCurrent.c[3] == aidx || pCurrent.c1[0] == aidx || pCurrent.c1[1] == aidx)
+						connected = true;
+					else
+						connected = false;
+
+					// this is the distance if we add a little velosity to the current positions of the particles; we need to see if they getting closer or not
+					dFuture = distance(		float2(	pCurrent.x + (float)pCurrent.vx * dFutureFactor,
+													pCurrent.y + (float)pCurrent.vy * dFutureFactor),
+											float2(	pAnother.x + (float)pAnother.vx * dFutureFactor,
+													pAnother.y + (float)pAnother.vy * dFutureFactor));
+
+					if (dFuture < d)
+						closing = true;
+					else
+						closing = false;
+					
+					// creating connection
+					// this part may look a bit bulky with those if's ladders, but we can't use methods or have a data structure of size 6, so ifs
+					radiuses = (linkStart - tMid * tLinkDown) * radius2;
+					if (!connected && currentAvailable && anotherAvailable && d < radiuses && closing){		// if !connected, available and getting closer
+						// connect them
+						if (pCurrent.c[0] == NOLINK)
+							particlePos[id.x].c[0] = aidx;
+						else
+							if (pCurrent.c[1] == NOLINK)
+								particlePos[id.x].c[1] = aidx;
+							else
+								if (pCurrent.c[2] == NOLINK)
+									particlePos[id.x].c[2] = aidx;
+								else
+									if (pCurrent.c[3] == NOLINK)
+										particlePos[id.x].c[3] = aidx;
+									else
+										if (pCurrent.c1[0] == NOLINK)
+											particlePos[id.x].c1[0] = aidx;
+										else
+											particlePos[id.x].c1[1] = aidx;
+						if (pAnother.c[0] == NOLINK)
+							particlePos[aidx].c[0] = id.x;
+						else
+							if (pAnother.c[1] == NOLINK)
+								particlePos[aidx].c[1] = id.x;
+							else
+								if (pAnother.c[2] == NOLINK)
+									particlePos[aidx].c[2] = id.x;
+								else
+									if (pAnother.c[3] == NOLINK)
+										particlePos[aidx].c[3] = id.x;
+									else
+										if (pAnother.c1[0] == NOLINK)
+											particlePos[aidx].c1[0] = id.x;
+										else
+											particlePos[aidx].c1[1] = id.x;
+						connected = true;
+					}
+
+					// and finally we need to calculate the force the particles affect each other with and modify delta velosity variable (which will be applied in another kernel)
+					//radiuses = (linkStart - tMid * tLinkDown) * radius2;
+					radiuses = linkStart * radius2;
+					if (d < radiuses){
+						// get vector current -> another
+						dposx = pAnother.x - pCurrent.x;
+						dposy = pAnother.y - pCurrent.y;		// p1 -> p2 vector
+
+						// the following variable is denominator of repulse strength value
+						// you can see it's power of 8 (this is a close approximation of the real intermolecular forces)
+						// if we use distance, we may end up with extreme values, because fast particles can get reaaly close to another particle
+						// because, you know, discrete time steps are not infinitely small, so there's step size based error
+						// and it can be insanely huge with the power of 8
+						// so, I limited the distance by a fraction of "zero forces point", and also limited its maximum value
+						// most computations happen in the not limited range of the distances, so the matter acts natural, because the limit is not being reached
+						// this limit only shoots at extreme cases, and mantains stability by cutting very big forces to affect particles
+						dFixed = clamp(d, 0.84f * dLink, 8.0f);
+
+						// now we calculate the force particles afect each other with
+						// the force works along the line both particles lay on, and we have distance vector parallel to this line, so the calculation is really simple
+						pushForce = - (1.0f - tMid * tRepulseDecay) * pow(dLink/dFixed, 8);
+						pushForce += (1.0f - tMid * tAttractDecay) * pow(dLink/dFixed, 4);
+						pushForce *= floatToIntK * 130 * normalize(float2(dposx, dposy));
+
+						// lots of threads do this exact operation in parallel, so we must write data the way all write operation count
+						// there's "interlocked" set of intrinsic HLSL operations, that can safely modify a variable
+						// so, we use InterlockedAdd(), but it only works for int or uint types because of hardware limits
+						// and this is the reason we are using int type for valosity and its derivatives
+						InterlockedAdd(particlePos[id.x].dvx, (int)pushForce.x);
+						InterlockedAdd(particlePos[id.x].dvy, (int)pushForce.y);
+						InterlockedAdd(particlePos[aidx].dvx, -(int)pushForce.x);
+						InterlockedAdd(particlePos[aidx].dvy, -(int)pushForce.y);
+					}
+					pi++;
+				}
+			}
+			gj++;
+		}
+		gi++;
+	}
+
+	// checking if connected particles should be disconnected
+	// if they are too far from each other and keep flying away, the connection breaks
+	pCurrent = particlePos[id.x];
+	gi = 0;
+	i = 0;
+	while (i < 6){
+		i1 = i - 4;
+		if (i1 < 0)
+			linkValue = pCurrent.c[i];
+		else
+			linkValue = pCurrent.c1[i1];
+		if (linkValue != NOLINK){					// has connection
+			gi++;							// in this loop I used gi variable to count connections of the particle, to modify its color alpha (to smoothen the borders visually)
+			if (id.x < linkValue){			// if current is smaller and thus responsible for tracking connection (to avoid doing each link twice)
+				aidx = linkValue;
+				tMid = 0.5f * (particles[id.x].t + particles[aidx].t);
+				pAnother = particlePos[aidx];
+
+				// there's also little temperature exchange part of code
+				// it's a good place for it, because we check particle's existing connections, and temperature dissipates through these connections
+				dTemperature = particles[id.x].t - particles[aidx].t;
+				particles[id.x].t -= tExchangeRate * dTemperature;
+				particles[aidx].t += tExchangeRate * dTemperature;
+
+				d = distance(	float2(pCurrent.x, pCurrent.y),
+								float2(pAnother.x, pAnother.y));
+				dFuture = distance(		float2(	pCurrent.x + (float)pCurrent.vx * dFutureFactor,
+												pCurrent.y + (float)pCurrent.vy * dFutureFactor),
+										float2(	pAnother.x + (float)pAnother.vx * dFutureFactor,
+												pAnother.y + (float)pAnother.vy * dFutureFactor));
+				radiuses = (linkBreak - tMid * tLinkDown) * radius2;
+				if (d > radiuses && dFuture > d){					// if too far and leaving - disconnect
+					if (i1 < 0){
+						pCurrent.c[i] = NOLINK;
+						particlePos[id.x].c[i] = NOLINK;
+					}
+					else{
+						pCurrent.c1[i1] = NOLINK;
+						particlePos[id.x].c1[i1] = NOLINK;
+					}
+					if (pAnother.c[0] == id.x)
+						particlePos[aidx].c[0] = NOLINK;
+					else
+						if (pAnother.c[1] == id.x)
+							particlePos[aidx].c[1] = NOLINK;
+						else
+							if (pAnother.c[2] == id.x)
+								particlePos[aidx].c[2] = NOLINK;
+							else
+								if (pAnother.c[3] == id.x)
+									particlePos[aidx].c[3] = NOLINK;
+								else
+									if (pAnother.c1[0] == id.x)
+										particlePos[aidx].c1[0] = NOLINK;
+									else
+										particlePos[aidx].c1[1] = NOLINK;
+				}
+			}
+		}
+		i++;
+	}
+
+	// and here we assign particle's alpha layer based on the number of connections particle has
+	// so, particles along the borders are a bit transparent, and that makes the whole matter look more smooth
+	particles[id.x].color &= -1 >> 8;								// cleans alpha layers
+	particles[id.x].color |= (uint)(255 * (0.52f + 0.08f * gi)) << 24;	// writes a new alpha layer based on the amount of connections the particle has
+}
+
+
+// this kernel implements links based velosity share between the particles
+// why? formally it's viscosity, but practically it helps to stabilize the matter, because there's still discretization based errors in every interaction
+// and if part of particle's velosity goes to the particles it's connected to, the matter made of particles smoothes the extremal spikes and is stable as a mass
+#pragma kernel velShare
+[numthreads(256,1,1)]
+void velShare (uint3 id : SV_DispatchThreadID){
+	int i, i1, aidx;
+	uint linkValue;
+	float dvx, dvy, dposx, dposy;
+	float2 proj, nProj;
+	float projFactor;
+	soilParticlePos pCurrent, pAnother;
+	uint NOLINK = 10000000;
+	pCurrent = particlePos[id.x];
+	float tMid;
+	i = 0;
+	while (i < 6){
+		i1 = i - 4;
+		if (i1 < 0)
+			linkValue = pCurrent.c[i];
+		else
+			linkValue = pCurrent.c1[i1];
+		if (linkValue != NOLINK){					// has connection
+			if (id.x < linkValue){					// if current is smaller and thus responsible for tracking connection
+				aidx = linkValue;
+				pAnother = particlePos[aidx];
+				pCurrent = particlePos[id.x];
+
+				tMid = 0.5 * (particles[id.x].t + particles[aidx].t);
+
+				dvx = (float)pAnother.vx - (float)pCurrent.vx;
+				dvy = (float)pAnother.vy - (float)pCurrent.vy;		// p2's vel in p1's coords
+				dposx = -pAnother.x + pCurrent.x;
+				dposy = -pAnother.y + pCurrent.y;		// p2 -> p1 vector
+
+				nProj = normalize(float2(dposx, dposy));
+				projFactor = dot(float2(dvx, dvy), nProj);
+				proj = 0.12f * projFactor * nProj;// * (1 - 0.5 * tMid);
+
+				InterlockedAdd(particles[aidx].ddvx, -(int)(proj.x));
+				InterlockedAdd(particles[aidx].ddvy, -(int)(proj.y));
+				InterlockedAdd(particles[id.x].ddvx, (int)(proj.x));
+				InterlockedAdd(particles[id.x].ddvy, (int)(proj.y));
+
+			}
+		}
+		i++;
+	}
+}
+
+// previous kernel accumulates all forces being shared, and the following one actually modifies the velosities of the particles based on that data
+#pragma kernel dVelApply
+[numthreads(256,1,1)]
+void dVelApply (uint3 id : SV_DispatchThreadID){
+	particlePos[id.x].vx += particles[id.x].ddvx;
+	particlePos[id.x].vy += particles[id.x].ddvy;
+
+	particles[id.x].ddvx = 0;
+	particles[id.x].ddvy = 0;
+}
+
+
+// and this kernel is almost equal to the velShare one, but onstead of velosity, we share the momentary impulse, that the particle has got on the current cycle
+// this also helps to distribute spikes between more particles, and increase stability of the matter
+#pragma kernel impulseShare
+[numthreads(256,1,1)]
+void impulseShare (uint3 id : SV_DispatchThreadID){
+	int i, i1, aidx;
+	uint linkValue;
+	float dvx, dvy, dposx, dposy;
+	float2 proj, nProj;
+	float projFactor;
+	soilParticlePos pCurrent, pAnother;
+	uint NOLINK = 10000000;
+	pCurrent = particlePos[id.x];
+	i = 0;
+	while (i < 6){
+		i1 = i - 4;
+		if (i1 < 0)
+			linkValue = pCurrent.c[i];
+		else
+			linkValue = pCurrent.c1[i1];
+		if (linkValue != NOLINK){					// has connection
+			if (id.x < linkValue){					// if current is smaller and thus responsible for tracking connection
+				aidx = linkValue;
+				pAnother = particlePos[aidx];
+				pCurrent = particlePos[id.x];
+
+				dvx = (float)pAnother.dvx - (float)pCurrent.dvx;
+				dvy = (float)pAnother.dvy - (float)pCurrent.dvy;		// p2's vel in p1's coords
+				dposx = -pAnother.x + pCurrent.x;
+				dposy = -pAnother.y + pCurrent.y;		// p2 -> p1 vector
+
+				nProj = normalize(float2(dposx, dposy));
+				projFactor = dot(float2(dvx, dvy), nProj);
+				proj = 0.12f * projFactor * nProj;
+
+				InterlockedAdd(particles[aidx].ddvx, -(int)(proj.x));
+				InterlockedAdd(particles[aidx].ddvy, -(int)(proj.y));
+				InterlockedAdd(particles[id.x].ddvx, (int)(proj.x));
+				InterlockedAdd(particles[id.x].ddvy, (int)(proj.y));
+			}
+		}
+		i++;
+	}
+}
+
+
+// and again, we have a separate kernel to apply the results of impulse share strictly after all particles affected their neighbors
+#pragma kernel dImpulseApply
+[numthreads(256,1,1)]
+void dImpulseApply (uint3 id : SV_DispatchThreadID){
+	particlePos[id.x].dvx += particles[id.x].ddvx;
+	particlePos[id.x].dvy += particles[id.x].ddvy;
+
+	particles[id.x].ddvx = 0;
+	particles[id.x].ddvy = 0;
+}
+
+
+// after all interaction calculations are done, this kernel applies velosities to change the positions
+// also adds gravity and density based viscosity
+#pragma kernel calcApply
+[numthreads(256,1,1)]
+void calcApply (uint3 id : SV_DispatchThreadID){
+	int2 gp;											// grid coordinates
+	float2 pushForce;
+	float denseSlowK;
+
+	// this value is fixed update deltatime
+	// the smaller it is, the smaller discretization based error due to more precise calculations
+	// but if you make it smaller, simulation will work slower too, then you would need to run more simulation steps
+	// just add more doCalcs() in calcs.update() methos in calcs.cs
+	// but that may reduce fps, so do all this only if you have better videocard then mine
+	// I optimized current performance to run with 30 fps on my GeForce GT 750M, which is rather slow
+	float translateFactor = 0.0016;
+
+	float d;
+	float tGravAdd = 0.5f;								// how much more gravity will deeper layers of liquid phase experience
+
+	int gcs = 36, gcl = 35;								// grid cell size, grid cell last
+
+	float floatToIntK = 1200000;
+	float intMultiplier = 1.0f/(float)floatToIntK;		// int velosity to float
+
+	gp = clamp(int2((int)(0.25f * particlePos[id.x].x), (int)(0.25f * particlePos[id.x].y)), int2(0, 0), int2(255, 255));
+
+	// explosion here being applied to the particle
+	if (expl[0].r > 0){
+		if (abs(particlePos[id.x].x - expl[0].x) < expl[0].r && abs(particlePos[id.x].y - expl[0].y) < expl[0].r){
+			pushForce.x = particlePos[id.x].x - expl[0].x;
+			pushForce.y = particlePos[id.x].y - expl[0].y;
+			d = distance(float2(0, 0), pushForce);
+			if (d < expl[0].r){
+				pushForce = expl[0].f * (expl[0].r - d) * normalize(pushForce);
+				particlePos[id.x].vx += floatToIntK * pushForce.x;
+				particlePos[id.x].vy += floatToIntK * pushForce.y;
+			}
+		}
+	}
+	particlePos[id.x].vx += particlePos[id.x].dvx;
+	particlePos[id.x].vy += particlePos[id.x].dvy;
+
+	particlePos[id.x].dvx = 0;
+	particlePos[id.x].dvy = 0;
+	particles[id.x].ddvx = 0;
+	particles[id.x].ddvy = 0;
+	particles[id.x].impact = 0;
+	particles[id.x].t = clamp(particles[id.x].t - 0.001f, 0.0, 1.0);		// temperature decay
+
+	// and finally we change particle's coordinates based on its velosity; multiplier used to turn velosity from int to float form
+	particlePos[id.x].x += intMultiplier * translateFactor * particlePos[id.x].vx;
+	particlePos[id.x].y += intMultiplier * translateFactor * particlePos[id.x].vy;
+
+	// the following parameter is dense based viscosity
+	// desnMask is being refreshed on each frame, and it's used here to slow the partciles down, think of it like kinetic energy dissipates to heat
+	denseSlowK = 0.9999f - 0.25f * clamp(1 - 1.5f * particles[id.x].t, 0, 1) * densMask[256 * gp.y + gp.x] * (1 - gravMask[256 * gp.y + gp.x]);
+	particlePos[id.x].vx *= denseSlowK;
+	particlePos[id.x].vy *= denseSlowK;
+
+	// gravity affects particles based on gravMask, which is being refreshed on each frame
+	particlePos[id.x].vy -= translateFactor * 800.0f * floatToIntK * clamp(gravMask[256 * gp.y + gp.x] + tGravAdd * particles[id.x].t, 0, 1);
+}
+
+// the following kernel runs only once, there's no threads, it is used to do simple things to the data, that doesn require much computations
+// currently the only thing this kernel does is it cleans the explosion if it present (otherwise it would work as a constant force field)
+#pragma kernel oneThreadAction
+[numthreads(1, 1, 1)]
+void oneThreadAction(uint3 id : SV_DispatchThreadID){
+	if (expl[0].r > 0){
+		expl[0].r = 0;
+	}
+}
+
+
+// and finally we have reached the visualization part
+// here we need to turn the data about particle positions into a set of pixels
+// we have a render texture set for the shader, and we can write pixels on that texture
+// but there's a problem, we need to draw pixels in parallel, and that creates problems
+
+// You know, I wanted to create a game, which would have to look good, but drawing a pixel per particle woudln look good, because imagine:
+// there's a slowly moving particle, and it occupies one pixel for some time, then jumps to another pixel, and I don want that jump to happen
+// I wanted pixels to be smoothly drawn, so the pixels should smoothly change color based on how much a particle occupies a pixel
+// but if particle size equals pixel size, there will be flickering while the particle moves, because if it's in pixel's center, it is bright
+// and if it's between pixels, they both a dim and blurred
+// so, I decided the particle should occupy as little pixels as need to make it look as a constant brightness spot while it's moving
+// and that required using a 3x3 pixels area with blend (so outer pixels are more transparent than the inner one)
+// blending, you see
+// we need to get the color from the pixel we're about to rewrite, and calculate the new color based on the alpha of the new color
+// but between the moments of reading and writing the color, there's chance the pixel have been overrwritten by another thread
+// which leads to flicker of some pixels, and that is not satisfying
+// this means we can only rely on the "interlocked" operations, but this leads to two problems:
+// 1. there's not much operations to do alpha based blend of a color into another color
+// 2. "interlocked" operations are slow
+// to solve the first one, I just had to use the best fitting operation we have, which is InterlockedMax
+// to solve the second one, I used one uint variable for all 4 color channels of the color instead of four variables, and alpha is located at significant bits
+// the solution is not perfect, but it is an engineering compromise: it is fast and allows to use 4 million colors to color the pixels
+
+#pragma kernel setPixels
+[numthreads(256, 1, 1)]
+void setPixels(uint3 id : SV_DispatchThreadID){
+	float floatToIntK = 1200000;
+	int i, j;
+	int pixx0, pixy0;
+	pixx0 = (int)particlePos[id.x].x;
+	pixy0 = (int)particlePos[id.x].y;
+	uint c, cPixel;
+	float2 pushForce;
+	float d;
+	int currentx, currenty, currentPixel;
+	float sinK;
+	uint r, g, b, a, tr;						// rgba channel values of the pixel, tr - temperature based component of red color
+	c = particles[id.x].color;		// color of the particle
+	i = -1;
+	while (i <= 1){
+		j = -1;
+		while (j <= 1){
+			currentx = pixx0 + i;
+			currenty = pixy0 + j;
+			if (currentx >= 0 && currentx < 1024 && currenty >= 0 && currenty < 1024){
+				currentPixel = currenty * 1024 + currentx;
+				d = distance(float2(particlePos[id.x].x, particlePos[id.x].y), float2(currentx + 0.5f, currenty + 0.5f));
+				// these are color channel values of particle's color
+				a = c >> 24,
+				r = (c >> 16) % 256,
+				g = (c >> 8) % 256;
+				b = c % 256;
+
+				tr = 255 * particles[id.x].t;		// this is particle's temperature projected on [0..255] range
+				//tr = 0;							// uncomment this to turn temperature based color change off
+
+				// this part makes hot particles look red, as if it's lava
+				//
+				r = clamp(r + tr, 0, 255);
+				a = clamp(a + tr, 0, 255);
+				g = clamp((int)g - (int)tr, 0, 255);
+				g = clamp(g + (uint)(0.33 *tr), 0, 255);
+				b = clamp((int)b - (int)tr, 0, 255);
+				//
+
+				// this part makes hot particles look blue, as if it's water
+				/*
+				r = clamp((int)r - (int)(tr / 2), 0, 255);
+				g = clamp((int)g - (int)(tr / 2), 0, 255);
+				b = clamp((int)b + (int)tr, 0, 255);
+				*/
+
+				sinK = sin(acos(clamp(0.45f * d, 0, 1))) * (float)a / 256.0;		// this can be multiplied by color's alpha channel, but currently it's not used
+
+				// here we blend the background color of current pixel with the particle's color, based on alpha
+				cPixel = 	(((uint)(a * sinK)) << 24) |
+							(((uint)(r * sinK)) << 16) |
+							(((uint)(g * sinK)) << 8) |
+							(uint)(b * sinK);
+
+				// this version has slightly more bright and colorful particles, but their edges are sharper
+				//cPixel = 	(((uint)(a * sinK)) << 24) |
+				//			(((uint)(r)) << 16) |
+				//			(((uint)(g)) << 8) |
+				//			(uint)(b);
+
+				// finally we write the new value to the pixels array
+				// but normal assign would cause parallel threads interference, so pixels will flicker
+				// because between we read and wrote a piece of data it would frequently be rewriten by another thread, and that data will be lost
+				// so, we used InterlockedMax(), which guarantees atomic write
+				// and because our significant bytes are alpha, pixel will have the color with the higher alpha
+				InterlockedMax(pixels[currentPixel], cPixel);
+			}
+			j++;
+		}
+		i++;
+	}
+
+	// unlike other "for each particle" ones, this kernel runs only once per Update(), so it's convenient to place here some other things
+	// this one handles the explosions: if there's one, it changes temperature of the particles
+	// (the force is being applied in calcApply kernel, because setPixels one runs after the velosity calculations have been applied)
+	if (expl[0].r > 0){
+		if (abs(particlePos[id.x].x - expl[0].x) < expl[0].r && abs(particlePos[id.x].y - expl[0].y) < expl[0].r){
+			pushForce.x = particlePos[id.x].x - expl[0].x;
+			pushForce.y = particlePos[id.x].y - expl[0].y;
+			d = distance(float2(0, 0), pushForce);
+			if (d < expl[0].r){
+				particles[id.x].t = clamp(particles[id.x].t + (expl[0].r - d) / expl[0].r, 0.0f, 1.0f);
+			}
+		}
+	}
+
+	// also, for the hot particles we slightly change their color toawrds black
+	if (particles[id.x].t > 0.1){
+		c = particles[id.x].color;
+
+		a = c >> 24;
+		r = clamp((int)((c >> 16) % 256) - (int)1, 0, 255);
+		g = clamp((int)((c >> 8) % 256) - (int)1, 0, 255);
+		b = clamp((int)(c % 256) - (int)1, 0, 255);
+
+		// DEBUG
+		particles[id.x].color = (a << 24 | r << 16 | g << 8 | b);				// comment this away to change temperature based darkening off
+	}
+}
+
+
+// as you may have notice, in the previous kernel we didn write pixels directly in the texture, because texture data format is float4
+// which we can write to with Interlocked commands
+// so, we used an array of uint, which then have to be copied in the texture
+// and the following kernel simply does this, but also adds a background "evening sky" gradient
+
+#pragma kernel visualize
+[numthreads(1024,1,1)]
+void visualize(uint3 id : SV_DispatchThreadID){
+	float k = 0.00390625;	
+	uint c = pixels[id.x + 1024 * id.y];
+	uint a = c >> 24,
+	r = (c >> 16) % 256,
+	g = (c >> 8) % 256,
+	b = c % 256;
+	float ak = a * k;
+	outputTexture[id.xy] = float4((1 - ak) * 0.1, (1 - ak) * 0.1, (1 - ak) * (0.65 - k * 0.32 * id.y), 1) + float4(ak * k * r, ak * k * g, ak * k * b, 1);
+}
+
+
+// array of pixels is being cleaned before visualizing the next frame
+
+#pragma kernel cleanTexture
+[numthreads(1024,1,1)]
+void cleanTexture(uint3 id : SV_DispatchThreadID){
+	pixels[id.x + 1024 * id.y] = 0;
+}
+
+
+// this kernel does some debug visualizations, not in use currently
+// if you uncomment its dispatch in calcs.cs, it will show you a fuzzy intersection of gravity and density masks
+
+#pragma kernel drawGrid
+[numthreads(256,1,1)]
+void drawGrid(uint3 id : SV_DispatchThreadID){
+	int gcs = 36, gcl = 35;
+	int i, j;
+	uint c;	// color
+	//c = float4(0, 0.1f * grid[gcs * (id.x + 256 * id.y) + gcl], 0, 1);					// ORIG
+	//c = float4(0, 0.4f * gravMask[256 * id.y + id.x], 0, 1);								// GRAV ORIG
+	c = (uint)((uint)clamp(1255 * densMask[256 * id.y + id.x] * (1 - gravMask[256 * id.y + id.x]), 0, 255)) | 255 << 24;
+	i = 0;
+	while (i < 4){
+		j = 0;
+		while (j < 4){
+			pixels[4 * id.x + i + 1024 * (4 * id.y + j)] |= c;
+			//if (grid[gcs * (id.x + 256 * id.y) + gcl] > 20)								// ORIG
+			//	pixels[4 * id.x + i + 1024 * (4 * id.y + j)] = float4(1, 1, 1, 1);			// ORIG
+			j++;
+		}
+		i++;
+	}
+}
+
+
+// before creating new grid, it should be cleaned
+// it's being cleaned by writing 0 in the last slot of each cell's array, which contains the number of particles referenced by the cell
+
+#pragma kernel cleanGrid
+[numthreads(256,1,1)]
+void cleanGrid(uint3 id : SV_DispatchThreadID){
+	int gcs = 36, gcl = 35;
+	grid[gcs * (256 * id.y + id.x) + gcl] = 0;
+}
+
+
+// in the following kernel we refresh the grid
+//
+// what is the grid?
+// it's 256x256x36 array, which stores references to the particles based on their coordinates
+// it's being refreshed on each frame to always provide actual information
+//
+// why do we need it?
+// it's a great optimization trick
+// each particle on each frame has to check distances to the nearby particles, and perfrom the particle-particle interaction
+// grid helps to avoid checking all particles by each particle
+// because we can only check a few particles from the 9 closest grid cells
+//
+// what refresh kernel does?
+// particle's grid coordinate is being calculated from particle's coordinates
+// then we add particle's index in the cell
+// each cell is an array of int (current size is 36), last element of this array contains the amount of particles references,
+// and other elements contain the references - indexes of the particles in the particle buffer
+
+#pragma kernel redrawGrid
+[numthreads(256,1,1)]
+void redrawGrid(uint3 id : SV_DispatchThreadID){
+	int2 gp;
+	int gcs = 36, gcl = 35;
+	int newCell;
+	int gi;
+	gp = clamp(int2((int)(0.25f * particlePos[id.x].x), (int)(0.25f * particlePos[id.x].y)), int2(0, 0), int2(255, 255));
+	gi = gcs * (256 * gp.y + gp.x);
+	InterlockedAdd(grid[gi + gcl], 1, newCell);		// we increment the amount of particles in the cell, and function retruns old value
+
+	// here we write particle's index to the cell, but if there are more particles in the cell, we decrement the number of particles, some particles won be counted
+	if (newCell < gcl)
+		grid[gi + newCell] = id.x;
+	else
+		InterlockedAdd(grid[gi + gcl], -1);
+}
+
+
+// grav mask is being drawn here
+// grav mask is used to only apply gravity to top layer of any pile of matter, and also on the particles that have room for falling down
+
+#pragma kernel gravMaskRefresh
+[numthreads(256,1,1)]
+void gravMaskRefresh(uint3 id : SV_DispatchThreadID){
+	int gcs = 36, gcl = 35;
+	int i;
+	float gCurrent, gMax = 0;
+	i = 0;
+	while (i < 256){
+		gCurrent = clamp(1.5f - 0.5f * grid[gcs * (256 * i + id.x) + gcl], 0.0f, 1.0f);
+		if (gCurrent > gMax)
+			gMax = gCurrent;
+		gravMask[i * 256 + id.x] = gMax;
+		i++;
+	}
+}
+
+
+// grav mask is being smoothed here
+// itś needed because the tiles of 256x256 grav mask are small, so particle distribution amongst them is not even, and it's being fixed with smoothing
+
+#pragma kernel gravMaskSmooth
+[numthreads(256,1,1)]
+void gravMaskSmooth(uint3 id : SV_DispatchThreadID){
+	int i, imax, j, jmax;
+	i = id.x - 1;
+	imax = id.x + 1;
+	while (i <= imax){
+		j = id.y - 1;
+		jmax = id.y + 1;
+		while (j <= jmax){
+			if (i >= 0 && j >= 0 && i < 255 && j < 255 && (i != id.x || j != id.y)){
+				gravMask[256 * id.y + id.x] += 0.3f * (gravMask[256 * j + i] - gravMask[256 * id.y + id.x]);
+			}
+			j++;
+		}
+		i++;
+	}
+}
+
+
+// density mask is being drawn here
+// density mask is used to slow down the particles that are stuck deep in the mass
+// this helps to stabilize the matter made of particles
+
+#pragma kernel densMaskRefresh
+[numthreads(256,1,1)]
+void densMaskRefresh(uint3 id : SV_DispatchThreadID){
+	int gcs = 36, gcl = 35;
+	int i;
+	densMask[256 * id.y + id.x] = clamp(0.12f * (-1 + grid[gcs * (256 * id.y + id.x) + gcl]), 0.0f, 1.0f);
+}
+
+
+// density mask is being smoothed here
+// again, we need to smooth it to overcome the unevenness of particle distribution
+
+#pragma kernel densMaskSmooth
+[numthreads(256,1,1)]
+void densMaskSmooth(uint3 id : SV_DispatchThreadID){
+	int i, imax, j, jmax;
+	bool lowDens = false;
+	int emptyNeighborsN = 0;
+	float currentValue = densMask[256 * id.y + id.x];
+	if (currentValue < 0.15f)
+		lowDens = true;
+	i = id.x - 1;
+	imax = id.x + 1;
+	while (i <= imax){
+		j = id.y - 1;
+		jmax = id.y + 1;
+		while (j <= jmax){
+			if (i >= 0 && j >= 0 && i < 255 && j < 255 && (i != id.x || j != id.y)){
+				if (densMask[256 * j + i] < 0.2f)
+					emptyNeighborsN++;
+				currentValue += 0.3f * (densMask[256 * j + i] - currentValue);
+			}
+			j++;
+		}
+		i++;
+	}
+	if (lowDens)
+		currentValue *= 0.5f;
+	currentValue *= (1 - ((float)emptyNeighborsN) / 8.0f);
+	densMask[256 * id.y + id.x] = currentValue;
+}
