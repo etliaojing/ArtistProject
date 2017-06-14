@@ -7,7 +7,7 @@ public class MultiParticleAreaEditor : Editor {
 
 	public override void OnInspectorGUI()
 	{
-        ParticlesArea sim = (ParticlesArea)target;
+        MultiParticlesArea sim = (MultiParticlesArea)target;
 
        /* if (SystemInfo.graphicsShaderLevel < 50)
         {
