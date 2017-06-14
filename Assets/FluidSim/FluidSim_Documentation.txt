@@ -1,0 +1,264 @@
+
+Thank you for purchasing FluidSim for Unity3d and supporting Indie development.
+FluidSim 1.7
+Created by: Phillip Heckinger, 2015.
+Tested in Unity Basic 3.5/4.0/5.0 and Unity Pro 3.5/4.0/5.0 (Shader Model 3.0 or higher), iOS verified but not activly supported.
+To contact me for support or to report a bug, please send a message to user name "Pheck" on forum.unity3d.com
+
+http://youtu.be/6eGSpyXi4zA
+http://www.vertexhorizon.com/fluidsim.html
+
+The FluidSim tool is designed to drop into any experience and be integrated quickly and easily.
+
+FluidSim works best in Unity Pro using the GPU, but it has been built to work in both Unity Basic (CPU only) or Unity Pro (CPU or GPU).
+
+Although FluidSim was built to be as flexible and dynamic as possible, some features can only be modified at runtime via functions.
+This allows you to change the values of FluidSim without causing unexpected bugs.  In addition to standard features, there are additional "helper" functions built in.
+Below is a list of every feature, what they do, and how they can be modified.
+
+============================
+
+*** Index ***
+
+============================
+
+- 1 - Revision History
+- 2 - Basic Usage
+- 3 - Performance & Optimization
+- 4 - Influence Actor Properties
+- 5 - Influence Actor Helper Functions
+- 6 - SimGrid Properties
+- 7 - SimGrid Helper Functions
+- 8 - Common Questions
+
+============================
+
+*** Revision History ***
+
+============================
+
+1.0:
+
+- Initial Release
+
+1.1:
+
+- iOS relavant changes.
+
+1.2 - 1.4:
+
+- cosmetic changes.
+
+1.5:
+
+- DX11 compatability update
+
+- Fixed rare PC exe bug.
+
+1.6:
+
+- Added support for c# file versions.
+- Fixed an overrun bug in the influence actor array.  To properly use influence actors, then destroy them, make sure to use the built in 
+  function for destroying actors "DestroyFluidInfluenceActor()".  Using "Detroy()" via unityscript will destroy the actor, but not remove 
+  it properly from the array.
+
+1.61:
+
+- Fixed a floating point bug in the cpu starting texture code.
+
+1.62:
+
+- Fixed a missing script ref in a prefab used in the C# files.
+
+1.7
+
+- Update to support Unity 5.0 f2.
+- Cleaned up warnings and errors.
+- Promoted C# files to be the primary format used and removed JS files.
+
+============================
+
+*** Basic Usage ***
+
+============================
+
+- Example levels using FluidSim are in the FluidSim\Examples\ folder.
+
+- To use FluidSim, first create a "FluidSim SimGrid" actor from the "GameObject/Create Other" menu.
+
+- If you are using Unity Pro, the default settings on the FluidSim SimGrid you created are a good starting point.
+- If you are using Unity Basic, select the FluidSim SimGrid you created and change "Use GPU Features" to false in the Fluid Sim Script.
+
+- The Second part of the FluidSim is the Fluid InfluenceActor.
+- Create a FluidSim InfluenceActor from the "GameObject/Create Other" menu.
+- Like before, turn on/off the GPU features depending on which version of Unity you are using.
+
+- With the default fluid settings, when you play the game, you should see movement (velocity) and the color white added to the simulation wherever the InfluenceActor is.
+- The direction of the movement is dictated by the rotation of the InfluenceActor Object.  The Color added to the simulation is determined in the actor settings.
+- If the InfluenceActor is far enough away from the simulation, it will not influence the simulation.
+
+- When you press "play" and your level runs, FluidSim will create a FluidSim_Connector object automatically.
+- This object helps to manage the SimGrids and the InfluenceActors and is required for FluidSim to operate correctly.  Please do not remove this object from the level.
+
+============================
+
+*** Performance & Optimization ***
+
+============================
+
+- If you have Unity Pro, use the GPU features boolean.  Running FluidSim on the GPU can be many many times faster than running it on the CPU.  Make sure to turn it on for the FluidSim to enable the GPU features.  The GPU boolean on the Influence Actors simply toggles the visibility of GPU only features.
+- FluidSim uses the object's position and size to determine where the Influence Actor should render.  When an Influence Actor moves far enough away from a FluidSim actor, the Influence Actor will be skipped for rendering.
+- Reducing the resolution of the simulation will greatly reduce the performance impact of the simulation.  If you are using Unity Pro, reducing the resolution of specific buffers can help reduce performance without any visual impact.
+- Although it can help reduce Influence Actor flicker by syncing the update of Influence Actors with the FluidSim, it can also cause excessive updates in some situations.  Reducing the update FPS of each buffer to be as low as possible will help to reduce performance.
+- Pressure Iterations are needed to create motion in the simulation.  Each iteration has an impact on performance, keeping the number of iterations as low as needed will help keep performance as fast as possible.
+- Although each Influence Actor has very little impact on performance, if there are enough of them, they can impact performance.  Influence Actors are printed into texture buffers that are used in the simulation.  Regardless of the number of Influence Actors, the simulation will cost the same.
+- Texture Influence Actors cost more than procedural Influence Actors.  Even so, it can be cheaper to use a single texture actor instead of many procedural actors.
+- When possible, use Static Collision instead of Dynamic Collision.  Static Collision will only update on Start() where Dynamic Collision will update every frame.
+- When running FluidSim on the CPU or in Unity Basic, outputting the velocity or collision buffer requires a color conversion causing a performance impact when compared to outputting the color buffer.  This performance impact is not present when using the GPU.
+
+============================
+
+*** Influence Actor Properties ***
+
+============================
+
+-Inspector Name-				-Hidden Name and Type-				-Update Type-			-Description-
+
+"Use GPU Features" 				useGPUfeatures : boolean			Start() (Unity Pro only)	Turns on/off the GPU ability and features of the simulation.  This feature only works in Unity Pro.  If you have Unity Pro, it is recommended you always keep this turned on to improve performance.
+
+"Show Popup Info"				showPopupInfo : boolean				Dynamic (editor only)		Turns on/off the display of popup info when you hover over a property.
+"Show Size Gizmos" 				showGizmos : boolean				Dynamic (editor only)		Turns on/off the display of sphere gizmos that show the world-space size of influence properties.
+"Scale Size by localScale" 			multiplySizeByScale : boolean;			Dynamic				The size of influence properties is multiplied by the localScale of the object if this value is True.  If this value is False, the property size will not change by the localScale of the object and will remain constant to the Size value.
+"Influence Priority" 				actorPriority : int;				Start() & Influence Function	- ChangeActorPriority( int ) - The Influence Priority of an object will offset the order in which Influence objects are rendered.  To force an Influence to render "in front" or "behind" another influence object, change its priority.
+
+(Collision)
+"Static Collision" 				staticCollision : boolean;			Start() & SimGrid Function	- RecreateStaticCollisionBuffer( boolean ) - Static Collision is a cheaper method to add collision to the simulation.  Once created it has "zero" performance cost, but cannot be modified at runtime.  The exception is the use of functions to clear or recreate the static collision buffer.  These functions have a heavy performance cost and should be used rarely.
+"Dynamic Collision" 				dynamicCollision : boolean;			Dynamic				Dynamic collision is cleared and recreated every frame that collision is updated.  Doing this allows collision to move through the simulation.  This is done cheaply and efficiently, but using static collision where possible is still cheaper.
+"Use Collision Mask" 				useCollisionMaskTexture : boolean;		Dynamic (Unity Pro only)	Allows the use of a texture image as the dynamic collision shape.  This is very useful for unusual shapes like airplanes and cars.
+"Collision Mask Texture" 			collisionMaskTexture : Texture2D;		Dynamic (Unity Pro only)	The texture used as the dynamic collision mask.  Make sure to clamp the edges of the texture in the texture import settings.
+"Collision Strength" 				collisionStrength : float;			Dynamic				The strength of the collision influence.  Zero is equal to no influence, One is full collision.
+"Collision Size" 				collisionSize : float;				Dynamic				The world-space size of the collision.  This value can be modified by the multiply by localScale property.
+"Collision Falloff" 				collisionFalloff : float;			Dynamic				The falloff value changes how soft the edge of the collision is.  A low falloff value will make the collision very soft, sometimes to the point that collision can appear to disappear.
+"Move Velocity Multiplier" 			moveVelocityMultiplier : float;			Dynamic				Collision moving in the simulation will cause velocity based on their speed.  To help tune or even turn off this velocity, you can use the velocity multiplier.
+
+(Color)
+"Add Color" 					addColor : boolean;				Dynamic				Turns on/off the color influence properties.
+"Use Color Mask" 				useColorMaskTexture : boolean;			Dynamic (Unity Pro only)	Turns on/off the use of a texture as the color input.  This allows for unique shapes and multi-colored images to be used as the input.
+"Color Mask Texture" 				colorMaskTexture : Texture2D;			Dynamic	(Unity Pro only)	The texture used to create dynamic color influence shapes.  The alpha channel of the texture is used as a mask to determine which part of the texture to display.  Make sure the texture import properties are set to clamp to avoid the texture from repeating.
+"Color (Alpha = Strength)" 			colorValue = Color;				Dynamic				The color of the influence object if a texture is not used.  Like the texture, the alpha is used as an alpha blend value.
+"Color Size" 					colorSize : float;				Dynamic				The world-space size of the color influence.  This value can be modified by the multiply by localScale property.
+"Color Falloff" 				colorFalloff : float;				Dynamic				The falloff value changes how soft the edge of the color is.  A low falloff value will make collision very soft, sometimes to the point that collision can appear to disappear.
+
+(Velocity)
+"Add Velocity" 					addVelocity : boolean;				Dynamic				Turns on/off the velocity influence properties.
+"Use Velocity Mask" 				useVelocityMaskTexture : boolean;		Dynamic (Unity Pro only)	Turns on/off the use of an image as the velocity input shape.
+"Velocity Mask Texture" 			velocityMaskTexture : Texture2D;		Dynamic (Unity Pro only)	The input texture for the velocity shape.  This input is determined by the red channel of the texture.  Make sure to clamp the edges of the texture in the texture import settings.
+"Velocity Strength" 				velocityStrength : float;			Dynamic				A multiplier applied to the velocity input.  The velocity direction is determined by the object's positive Z direction.  To change the velocity direction, rotate the object.  To change the strength of the velocity, modify this property.
+"Velocity Size" 				velocitySize : float;				Dynamic				The world-space size of the velocity input.  This value can be modified by the multiply by localScale property.
+"Velocity Falloff" 				velocityFalloff : float;			Dynamic				The falloff value changes how soft the edge of the velocity is.  A low falloff value will make velocity very soft, sometimes to the point that velocity can appear to disappear.
+
+============================
+
+*** Influence Actor Helper Functions ***
+
+============================
+
+ChangeActorPriority( int )			Sets the InfluenceActor Priority Level and Updates all SimGrids with the new value.
+
+DestroyFluidInfluenceActor()			Actors can be destroyed in any method supported by Unity.  This function destroys the InfluenceActor and cleans up the InfluenceActor Arrays with less performance impact than just using Destroy().
+
+============================
+
+*** SimGrid Properties ***
+
+============================
+
+-Inspector Name-				-Hidden Name and Type-				-Update Type-			-Description-
+
+"Use GPU Features"				useUnityProMethod : boolean			Start()	(Unity Pro only)	Pro Method renders the simulation using the GPU and is much faster.  If Pro Method is off, the simulation will render on the CPU and is much slower.
+
+"Fluid Update FPS"				fluidUpdateFPS : float				Start() & SimGrid Function	- SetFluidUpdateFPS( float ) - Fluid Update FPS controls how many times per second the fluid shader is calculated.  This value is set on Start() and can be changed with SetFluidUpdateFPS(float) on the Fluid script.
+"Sync Collision to Fluid FPS"			updateCollisionWithFluid : boolean		Start() & SimGrid Function	- SetSyncCollisionWithFluid( boolean ) - Syncing the Collision actors with the Fluid update will sometimes remove flicker from the Collision actors.  This will cause the Collision actors to update at the same frame rate as the Fluid Sim.
+"Collision Update FPS"				collisionUpdateFPS : float			Start() & SimGrid Function	- SetCollisionUpdateFPS( float ) - Collision Update FPS controls how many times per second the Collision actors are checked for updates and changed in the Fluid simulation.  This value is set on Start() and can be changed at runtime with SetCollisionUpdateFPS(float) on the Fluid script.
+"Sync Color to Fluid FPS"			updateColorWithFluid : boolean			Start() & SimGrid Function	- SetSyncColorWithFluid( boolean ) - Syncing the Color actors with the Fluid update will remove flicker from the Color actors.  This will cause the Color actors to update at the same frame rate as the Fluid Sim.
+"Color Update FPS"				colorUpdateFPS : float				Start() & SimGrid Function	- SetColorUpdateFPS( float ) - (Same as Fluid Update) Color Update FPS controls how many times per second the Color actors are checked for updates and added to the Fluid simulation.  This value is set on Start() and can be changed at runtime with SetColorUpdateFPS(float) on the Fluid script.
+"Sync Impulse to Fluid FPS"			updateImpulseWithFluid : boolean		Start() & SimGrid Function	- SetSyncImpulseWithFluid( boolean ) - Syncing the Impulse actors with the Fluid update will sometimes remove flicker from the Impulse actors.  This will cause the Impulse actors to update at the same frame rate as the Fluid Sim.
+"Impulse Update FPS"				impulseUpdateFPS : float			Start() & SimGrid Function	- SetImpulseUpdateFPS( float ) - Impulse Update FPS controls how many times per second the Impulse actors are checked for updates and changed in the Fluid simulation.  This value is set on Start() and can be changed at runtime with SetImpulseUpdateFPS(float) on the Fluid script.
+
+"Sim Strength"					simStrength : float				Dynamic & SimGrid Function	- ChangeSimStrength( float ) - Sim Strength is a strength multiplier globally applied to the forces in the Fluid simulation.  Sim Strength is set on Start() and can be changed at runtime with ChangeSimStrength(float) on the Fluid script.
+"Pressure Iterations"				pressureIteration : int				Dynamic				Pressure Iterations changes the details generated in the Simulation.  Increasing this number will increase the performance impact of the Simulation.  (A typical value is 20, but use the best looking number for your needs.)
+"Sim Resolution"				resolution : enum				Start()				*Same as "Color/Sim Resolution".  Resolution of the color field buffer.
+"Collision Resolution"				collisionResolution : enum			Start()	(Unity Pro only)	Resolution of the collision field buffer.  In Unity Basic, the collision resolution is the same as the color resolution.
+"Color/Sim Resolution"				resolution : enum				Start()				*Same as "Sim Resolution".  Resolution of the color field buffer.
+"Velocity Resolution"				velocityResolution : enum			Start()	(Unity Pro only)	Resolution of the velocity field buffer.  In Unity Basic, the velocity resolution is the same as the color resolution.
+"Output Texture"				outputTexture : enum				Start()				The buffer texture that will be output to the shader for display.  When using GPU FluidSim, all bufffers provide the same performance.  When using CPU FluidSim, the color buffer doesn't require color conversion and will provide the fastest performance.
+"Use My Material"				useMyMaterial : boolean				Start()				The output texture will be set in the material on the simulation surface instead of the Material Target.
+"Material Target"				materialTarget : Material			Start()				The output texture will be set in the Material Target.  This can be useful when you want to display the simulation output on an object other than the simulation surface..
+"Material Texture Slot"				materialTextureSlot : string			Start()				The name of the texture slot in the material you want to apply the output texture to.
+"Use Boundary Collision"			useBoundaryCollision : boolean			Start() & SimGrid Function	- RecreateStaticCollisionBuffer( boolean ) - A boolean value of true will recreate static collision with boundary collision on.  A value of false will recreate it without boundary collision.  A collision is applied to the outside edge of the simulation at the start of the simulation.  Not using Boundary Collision can, on rare occasions, cause unwanted Fluid results.
+
+"Use Start Collision Texture"			useStartCollisionTexture : boolean		Start() & SimGrid Function	- RecreateStaticCollisionBuffer( boolean ) - Toggles on/off the use of collision starting texture.
+"Starting Collision Texture"			startingCollisionTextureSource : Texture2D	Start() & SimGrid Function	- RecreateStaticCollisionBuffer( boolean ) - Texture used in the StaticCollision buffer.  Collision is stored in the blue channel of the image and the red and green channels are used for dynamic collision velocity information.  To avoid bugs, only use the blue channel for starting collision texture features.
+
+"Use Color Dissipation"				useColorDissipation : boolean			Start() & SimGrid Function	- ChangeColorDissipationBool( boolean ) - If Use Color Dissipation is set to false, the simulation will not use any color dissipation but a very small natural dissipation will still happen in the simulation.  Color Dissipation is set on Start() and can be changed at runtime with ChangeColorDissipationBool(boolean) on the Fluid script.
+"Color Dissipation Mask"			useColorDissipationTexture : boolean		Start()	(Unity Pro only)	Toggles on/off the use of a color dissipation texture.
+"Color Dissp. Texture"				colorDissipationTextureSource : Texture2D	Start()	(Unity Pro only)	The texture to be used with color dissipation.  Black is zero dissipation, White is full dissipation.  Color can be used for unique dissipation FX.
+"Color Dissipation Rate"			colorDissipation : float			Start() & SimGrid Function	- ChangeColorDissipationStrength( float ) - Color Dissipation Rate is set on Start() and can be changed at runtime with ChangeColorDissipationStrength(float).  Dissipation happens very fast and in most situations should be a very small number.
+"Dissipate To Color"				colorDissipateTo : Color			Start() & SimGrid Function	- ChangeColorDissipateTo( Color ) - The color that the fluid buffer will dissipate to when color dissipation is enabled.
+"Use Start Color Texture"			useStartColorTexture : boolean			Start()				Toggles on/off the texture being used as the starting value of the color field buffer.
+"Starting Color Texture"			startingColorTextureSource : Texture2D		Start()				The texture used as a starting point for the color field buffer.
+"Starting Color"				startingColor : Color				Start()				- Color used as a starting point across the whole color field buffer.  This value is overridden if the Starting Texture is used instead.
+
+"Use Velocity Dissipation"			useVelocityDissipation : boolean		Start() & SimGrid Function	- ChangeVelocityDissipationBool( boolean ) - If Use Velocity Dissipation is set to false, the simulation will not use any Velocity dissipation value but a very small natural dissipation will still happen in the simulation.  Velocity Dissipation is set on Start() and can be changed at runtime with ChangeVelocityDissipationBool(boolean) on the Fluid script.
+"Velocity Dissipation Mask"			useVelocityDissipationTexture : boolean		Start() (Unity Pro only)	Toggles on/off the use of a velocity dissipation texture.  Velocity always attempts to dissipate to a value of zero.
+"Velocity Dissp. Texture"			velocityDissipationTextureSource : Texture2D	Start() (Unity Pro only)	The Texture used in velocity dissipation.  Black is zero dissipation, White is full dissipation.
+"Velocity Dissipation Rate"			velocityDissipation : float			Start() & SimGrid Function	- ChangeVelocityDissipationStrength( float ) - Velocity Dissipation Rate is set on Start() and can be changed at runtime with ChangeVelocityDissipationStrength(float).  Dissipation happens very fast and in most situations should be a very small number.
+"Use Start Velocity Texture"			useStartVelocityTexture : boolean		Start()				Toggles on/off the texture being used as the starting value of the velocity field buffer.
+"Starting Velocity Texture"			startingVelocityTextureSource : Texture2D	Start()				- Uses a texture as a starting value for the Fluid simulation.  If you want parts of the Starting Texture Velocity to be zero, set the color to (0.5, 0.5, 0.5).  This is because a value of 0.5 is used as the zero location in the shader math, similarly to a normal map.
+"Starting Velocity"				startingVelocity : Vector2			Start()				Velocity used as a starting point across the whole velocity field buffer.  This value is overridden if the Starting Texture is used instead.
+
+(Hidden)					fluidRenderTextureSource : Texture2D		(Hidden)			This is the Color buffer output from the simulation.  This texture variable is public and available for reference by your custom scripts.  This texture should be treated as read-only.
+
+============================
+
+*** SimGrid Helper Functions ***
+
+============================
+
+ChangeSimStrength( float )			The Sim Strength variable is used in multiple ways across FluidSim.  If you want to change Sim Strength at runtime, you will need to use this function to do so.
+
+ChangeColorDissipationStrength( float )		Changes the color dissipation strength in the simulation.
+ChangeColorDissipateTo( Color )			Changes the color that the simulation is dissipating towards when color dissipation is applied.
+ChangeColorDissipationBool( boolean )		Turns on/off color dissipation at runtime.
+ChangeVelocityDissipationStrength( float )	Changes the velocity dissipation strength in the simulation.  Velocity dissipation always attempts to reach zero velocity.
+ChangeVelocityDissipationBool( boolean )	Turns on/off velocity dissipation at runtime.
+
+SetFluidUpdateFPS( float )			Changes the update rate of the fluid simulation calculations.  The float value is defined as FPS.  For example 30.0 is 30 updates per second.
+SetImpulseUpdateFPS( float )			Changes the update rate of the velocity impulse Influence Actors.
+SetColorUpdateFPS( float )			Changes the update rate of the color Influence Actors.
+SetCollisionUpdateFPS( float )			Changes the update rate of the collision Influence Actors.
+SetSyncCollisionWithFluid( boolean )		Changes if the collision Influence Actors will update at their own frame rate or with the simulation update.  This can reduce flickering of collision actors but can cause excessive collision updates in some situations.
+SetSyncImpulseWithFluid( boolean )		Changes if the velocity impulse Influence Actors will update at their own frame rate or with the simulation update.  This can reduce flickering of velocity impulse actors but can cause excessive impulse updates in some situations.
+SetSyncColorWithFluid( boolean )		Changes if the color Influence Actors will update at their own frame rate or with the simulation update.  This can reduce flickering of color actors but can cause excessive color updates in some situations.
+
+ClearAllDynamicBuffers()			Clears all texture buffers except static collision.
+ClearColorBuffer( Color )			Clears only the color buffer.  The color buffer will be cleared to the color input of the function.
+ClearColorBufferToTexture( Texture2D )		Clears only the color buffer.  The color buffer will be cleared to the texture input of the function.
+ClearVelocityBuffer( Vector2 )			Clears only the velocity buffer.  The velocity buffer will be cleared to the vector2 input of the function.
+ClearVelocityBufferToTexture( Texture2D )	Clears only the velocity buffer.  The velocity buffer will be cleared to the texture input of the function.  Velocity input textures use 0.5, 0.5 as the "zero" value similar to normal maps.  This allows positive and negative values to be applied from the texture.
+ClearDynamicCollisionBuffer()			Clears only the dynamic collision buffer.  The dynamic collision buffer is cleared and replaced with the static collision buffer at the start of each collision update automatically.  This function can be useful if you need to clear the dynamic buffer after you have turned off dynamic collision updates.
+ClearStaticCollisionBuffer()			Clears only the static collision buffer.  The static collision buffer also contains the boundary collision.  If you want to keep the boundary collision, be sure to use the RecreateStaticCollisionBuffer( boolean ) function after you have turned off all static collision actors.
+RecreateStaticCollisionBuffer( boolean )	Recreates the static collision buffer from all static collision Influence Actor inputs.  The boolean input value will cause the function to recreate the boundary collision.
+
+============================
+
+*** Common Questions ***
+
+============================
+
+- Why doesnt the CPU FluidSim look like the GPU FluidSim? - Because of optimization differences for CPU and GPU, there are slight differences between the two simulation outputs.
+- Why doesnt my Influence Actor show up? - Common areas to check are: Is the update FPS greater than zero?  Is the strength or color greater than zero?  Is the falloff too soft, making the influence appear subtle?  Is the Influence Actor close enough to the SimGrid in all directions, including "up/down"?  Is the dissipation too strong?  Is the property turned on in the Influence Actor?
+- Why does my Influence Actor Texture repeat across the SimGrid? - Influence Actor Textures need to be set to "clamp" in the texture import settings.
+- I turned on "clamp" for my Color texture, and it still looks wrong. - Influence Actor Color Textures use the alpha channel of the image to determine which part of the image to use.  If the alpha channel is missing or wrong, it will render across the entire SimGrid.
+- Why is my Influence input taller or wider than the Gizmo sphere? - This can happen if you scale the SimGrid non-uniformly.  FluidSim works best when everything has a uniform scale.  Its possible to use FluidSim with non-uniform scaling, but results will vary and are unpredictable.
+- Why are there gaps in my Influence "trail"? - If you see gaps is your influence trail during simulation, try turning down the velocity strength, or make the velocity size smaller.  This is caused when the velocity is so strong, or large, that it looks beyond your color location.
